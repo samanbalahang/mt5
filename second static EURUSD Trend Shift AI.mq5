@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| EURUSD Trend Shift AI v9.1 - Fixed & Clean Version (MT5)       |
+//| second static EURUSD Trend Shift AI v9.1 - Fixed & Clean Version (MT5)       |
 //+------------------------------------------------------------------+
 #property strict
 #include <Trade/Trade.mqh>
