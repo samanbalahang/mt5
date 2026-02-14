@@ -3,7 +3,7 @@
 //|                                        مدیریت معامله، ریسک، حد ضرر و حد سود |
 //+------------------------------------------------------------------+
 #property copyright "Albrooks Style System"
-#property version   "2.00"
+#property version   "2.10"   // نسخه به‌روز شده با پشتیبانی از حالت کل سرمایه
 
 #include "EntrySignalManager.mqh"
 #include "TrendCycleManager.mqh"
@@ -90,12 +90,16 @@ private:
    double                dailyPnL;
    datetime              lastResetTime;
    
-   // ========== متغیرهای جدید برای مدیریت SL اجباری ==========
-   bool                  lastTradeSLFailed;     // آیا آخرین معامله SL ثبت نشد؟
-   double                forcedSLDistance;      // فاصله اجباری SL (6 پیپ)
-   int                   consecutiveSLFailures; // تعداد دفعات متوالی عدم ثبت SL
-   datetime              lastSLFailTime;        // زمان آخرین عدم ثبت SL
-   double                pipValue;               // ارزش پیپ
+   // ========== متغیرهای مدیریت SL اجباری ==========
+   bool                  lastTradeSLFailed;
+   double                forcedSLDistance;
+   int                   consecutiveSLFailures;
+   datetime              lastSLFailTime;
+   double                pipValue;
+   
+   // ========== متغیرهای حالت کل سرمایه ==========
+   double                m_initialCapital;      // سرمایه اولیه در حالت FullCapital
+   bool                  m_useFullCapital;      // فعال بودن حالت FullCapital
    
 public:
    TradeRiskManager()
@@ -120,81 +124,65 @@ public:
       ArrayResize(activePositions, 0);
       ArrayResize(pendingTrades, 0);
       
-      // ========== مقداردهی متغیرهای SL اجباری ==========
+      // مقداردهی متغیرهای SL اجباری
       lastTradeSLFailed = false;
       forcedSLDistance = 6 * GetPipValue();     // 6 پیپ
       consecutiveSLFailures = 0;
       lastSLFailTime = 0;
       pipValue = GetPipValue();
+      
+      // مقداردهی متغیرهای حالت کل سرمایه
+      m_initialCapital = 0;
+      m_useFullCapital = false;
    }
    
-   // ========== متدهای جدید برای مدیریت SL اجباری ==========
-   
-   //-------------------------------------------------------------------
-   // دریافت ارزش پیپ بر اساس بروکر
-   //-------------------------------------------------------------------
+   // ========== متدهای مدیریت SL اجباری ==========
    double GetPipValue()
    {
       int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
       double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
       
       if(digits == 5 || digits == 3)
-         return point * 10;  // بروکر 5 رقم
+         return point * 10;
       else if(digits == 4 || digits == 2)
-         return point;       // بروکر 4 رقم
+         return point;
       else if(digits == 1)
-         return point;       // یرن
+         return point;
       else
-         return point;       // پیش‌فرض
+         return point;
    }
    
-   //-------------------------------------------------------------------
-   // ثبت عدم موفقیت SL
-   //-------------------------------------------------------------------
    void RecordSLFailure()
    {
       lastTradeSLFailed = true;
       consecutiveSLFailures++;
       lastSLFailTime = TimeCurrent();
-      
       Print("⚠️ ثبت SL در معامله قبلی ناموفق بود - دفعات متوالی: ", consecutiveSLFailures);
    }
    
-   //-------------------------------------------------------------------
-   // ثبت موفقیت SL
-   //-------------------------------------------------------------------
    void RecordSLSuccess()
    {
       lastTradeSLFailed = false;
       consecutiveSLFailures = 0;
-      
       Print("✅ ثبت SL با موفقیت انجام شد - شمارنده ریست شد");
    }
    
-   //-------------------------------------------------------------------
-   // دریافت SL اجباری (6 پیپ پایین‌تر/بالاتر)
-   //-------------------------------------------------------------------
    double GetForcedStopLoss(double entryPrice, bool isLong)
    {
       if(isLong)
-         return entryPrice - forcedSLDistance;  // 6 پیپ پایین‌تر
+         return entryPrice - forcedSLDistance;
       else
-         return entryPrice + forcedSLDistance;  // 6 پیپ بالاتر
+         return entryPrice + forcedSLDistance;
    }
    
-   //-------------------------------------------------------------------
-   // بررسی نیاز به SL اجباری
-   //-------------------------------------------------------------------
    bool NeedsForcedSL()
    {
-      // اگر آخرین معامله SL ثبت نشده باشد
       if(lastTradeSLFailed)
       {
          Print("⚠️ نیاز به استفاده از SL اجباری (6 پیپ) - آخرین معامله SL ثبت نشد");
          return true;
       }
       
-      // اگر در 1 ساعت گذشته 3 بار SL ثبت نشده باشد
       if(consecutiveSLFailures >= 3 && TimeCurrent() - lastSLFailTime < 3600)
       {
          Print("⚠️ هشدار: 3 بار متوالی SL ثبت نشده - استفاده از SL اجباری به مدت 1 ساعت");
@@ -204,9 +192,6 @@ public:
       return false;
    }
    
-   //-------------------------------------------------------------------
-   // ریست وضعیت SL اجباری (برای روز جدید)
-   //-------------------------------------------------------------------
    void ResetForcedSLStatus()
    {
       lastTradeSLFailed = false;
@@ -215,18 +200,36 @@ public:
       Print("📅 ریست وضعیت SL اجباری - روز جدید معاملاتی");
    }
    
-   //-------------------------------------------------------------------
-   // تنظیم فاصله SL اجباری (بر حسب پیپ)
-   //-------------------------------------------------------------------
    void SetForcedSLDistance(int pips)
    {
       forcedSLDistance = pips * GetPipValue();
       Print("📏 فاصله SL اجباری به ", pips, " پیپ تغییر یافت");
    }
    
-   //-------------------------------------------------------------------
-   // به‌روزرسانی موجودی حساب
-   //-------------------------------------------------------------------
+   // ========== متدهای مدیریت حالت کل سرمایه ==========
+   void SetFullCapitalMode(bool useFullCapital, double currentBalance = 0)
+   {
+      m_useFullCapital = useFullCapital;
+      if(m_useFullCapital)
+      {
+         if(currentBalance > 0)
+            m_initialCapital = currentBalance;
+         else
+            m_initialCapital = AccountInfoDouble(ACCOUNT_BALANCE);
+         Print("💰 حالت استفاده از کل سرمایه فعال شد. سرمایه پایه: ", DoubleToString(m_initialCapital, 2));
+         Print("   - معاملات بر اساس سرمایه پایه انجام می‌شود و سودها جداگانه نگهداری می‌شوند.");
+         Print("   - در صورت ضرر تا رسیدن به سرمایه پایه، از سودها استفاده می‌شود.");
+      }
+      else
+      {
+         Print("💰 حالت مدیریت سرمایه معمولی (ریسک-محور) فعال شد.");
+      }
+   }
+   
+   bool IsFullCapitalMode() const { return m_useFullCapital; }
+   double GetInitialCapital() const { return m_initialCapital; }
+   
+   // ========== به‌روزرسانی موجودی حساب ==========
    void UpdateAccountBalance(double balance)
    {
       // ریست روزانه
@@ -235,23 +238,33 @@ public:
       {
          dailyPnL = 0;
          lastResetTime = currentTime;
-         
-         // ریست وضعیت SL اجباری در شروع روز جدید (اختیاری)
-         // ResetForcedSLStatus();
+         ResetForcedSLStatus();
       }
       
       accountBalance = balance;
    }
    
-   //-------------------------------------------------------------------
-   // محاسبه حجم موقعیت بر اساس ریسک
-   //-------------------------------------------------------------------
+   // ========== محاسبه حجم موقعیت بر اساس ریسک ==========
    double CalculatePositionSize(double entry, double stopLoss, double riskPercent = -1)
    {
       if(accountBalance <= 0) return 0;
       
+      double baseForRisk;
+      if(m_useFullCapital)
+      {
+         // اگر موجودی فعلی از سرمایه اولیه بیشتر است، از سرمایه اولیه استفاده کن
+         if(accountBalance >= m_initialCapital)
+            baseForRisk = m_initialCapital;
+         else // اگر کمتر شده، از کل موجودی استفاده کن
+            baseForRisk = accountBalance;
+      }
+      else
+      {
+         baseForRisk = accountBalance; // حالت عادی
+      }
+      
       double risk = (riskPercent > 0) ? riskPercent : riskParams.maxRiskPerTrade;
-      double riskAmount = accountBalance * (risk / 100.0);
+      double riskAmount = baseForRisk * (risk / 100.0);
       
       // بررسی ریسک روزانه
       if(dailyPnL + riskAmount > accountBalance * (riskParams.maxRiskPerDay / 100.0))
@@ -260,7 +273,6 @@ public:
       double stopDistance = MathAbs(entry - stopLoss);
       if(stopDistance == 0) return 0;
       
-      // محاسبه حجم اولیه با احتساب ارزش تیک
       double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
       double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
       
@@ -268,7 +280,6 @@ public:
       
       double volume = (riskAmount / (stopDistance / tickSize * tickValue));
       
-      // گرد کردن به حجم مجاز
       double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
       double minVol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
       double maxVol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
@@ -280,9 +291,7 @@ public:
       return volume;
    }
    
-   //-------------------------------------------------------------------
-   // تنظیمات اولیه معامله - نسخه اصلاح شده با پشتیبانی از SL اجباری
-   //-------------------------------------------------------------------
+   // ========== تنظیمات اولیه معامله ==========
    TradeSetup CreateTradeSetup(const SignalBar &signal, double fullVolume)
    {
       TradeSetup setup;
@@ -290,7 +299,6 @@ public:
       
       if(signal.type == SIGNAL_NONE) return setup;
       
-      // محاسبه حجم
       double totalVolume = (fullVolume > 0) ? fullVolume : 
                            CalculatePositionSize(signal.entryPrice, signal.stopLoss);
       
@@ -307,25 +315,20 @@ public:
       setup.signalStrength = signal.strength;
       setup.symbol = _Symbol;
       
-      // ========== مدیریت SL با قابلیت SL اجباری ==========
       if(NeedsForcedSL())
       {
-         // استفاده از SL اجباری (6 پیپ)
          setup.stopLoss = GetForcedStopLoss(signal.entryPrice, signal.isLong);
-         setup.takeProfit1 = 0;  // TP بعداً محاسبه می‌شود
-         
+         setup.takeProfit1 = 0;
          Print("🔒 استفاده از SL اجباری - فاصله: ", forcedSLDistance / pipValue, " پیپ");
          Print("   قیمت ورود: ", DoubleToString(setup.entryPrice, _Digits), 
                " | SL: ", DoubleToString(setup.stopLoss, _Digits));
       }
       else
       {
-         // استفاده از SL معمولی از سیگنال
          setup.stopLoss = signal.stopLoss;
          setup.takeProfit1 = signal.takeProfit1;
       }
       
-      // تنظیم تی‌پی اگر وجود نداشت
       if(setup.takeProfit1 == 0)
       {
          double riskReward = (signal.strength >= 4) ? 2.0 : 1.5;
@@ -342,7 +345,6 @@ public:
       
       setup.isValid = true;
       
-      // ذخیره در لیست معاملات در انتظار
       int idx = ArraySize(pendingTrades);
       ArrayResize(pendingTrades, idx + 1);
       pendingTrades[idx] = setup;
@@ -350,77 +352,7 @@ public:
       return setup;
    }
    
-   //-------------------------------------------------------------------
-   // بررسی همپوشانی پین بار
-   //-------------------------------------------------------------------
-   bool HasExcessiveOverlap(const MqlRates &candles[], int index, 
-                           const SupportResistanceLevel &levels[], int levelCount)
-   {
-      if(index < 1) return false;
-      
-      MqlRates current = candles[index];
-      
-      // بررسی همپوشانی با کندل قبل
-      double overlapRange = 0;
-      
-      if(current.high > candles[index-1].low && current.low < candles[index-1].high)
-      {
-         overlapRange = MathMin(current.high, candles[index-1].high) - 
-                       MathMax(current.low, candles[index-1].low);
-         
-         double candleRange = current.high - current.low;
-         if(overlapRange > candleRange * 0.7)  // بیش از 70% همپوشانی
-            return true;
-      }
-      
-      // بررسی همپوشانی با سطوح حمایت/مقاومت
-      for(int i = 0; i < levelCount; i++)
-      {
-         if(MathAbs(current.close - levels[i].price) < current.close * 0.001)
-         {
-            if(levels[i].touchCount >= 3)  // سطوح قوی
-               return true;
-         }
-      }
-      
-      return false;
-   }
-   
-   //-------------------------------------------------------------------
-   // تشخیص فیک بریک‌اوت
-   //-------------------------------------------------------------------
-   bool IsFakeBreakout(const MqlRates &candles[], int index, double level, bool isBreakoutUp)
-   {
-      if(index < 2) return false;
-      
-      MqlRates breakoutCandle = candles[index - 1];
-      MqlRates currentCandle = candles[index];
-      
-      if(isBreakoutUp)
-      {
-         // کندل بریک‌اوت بالای سطح بسته شده
-         if(breakoutCandle.close > level)
-         {
-            // کندل بعدی پایین سطح بسته شده
-            if(currentCandle.close < level)
-               return true;
-         }
-      }
-      else
-      {
-         if(breakoutCandle.close < level)
-         {
-            if(currentCandle.close > level)
-               return true;
-         }
-      }
-      
-      return false;
-   }
-   
-   //-------------------------------------------------------------------
-   // اضافه کردن پوزیشن جدید
-   //-------------------------------------------------------------------
+   // ========== اضافه کردن پوزیشن جدید ==========
    int AddPosition(int ticket, const TradeSetup &setup)
    {
       int idx = ArraySize(activePositions);
@@ -432,33 +364,24 @@ public:
       activePositions[idx].currentPrice = setup.entryPrice;
       activePositions[idx].stopLoss = setup.stopLoss;
       activePositions[idx].takeProfit = setup.takeProfit1;
-      activePositions[idx].volume = setup.initialSize;  // فقط 20% اولیه
+      activePositions[idx].volume = setup.initialSize;
       activePositions[idx].isLong = setup.isLong;
       activePositions[idx].status = STATUS_POSITION_OPEN;
       activePositions[idx].riskAmount = MathAbs(setup.entryPrice - setup.stopLoss) * 
                                         setup.initialSize * 
                                         SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
       
-      // ثبت موفقیت SL (چون در این مرحله SL با موفقیت ثبت شده)
       RecordSLSuccess();
       
       return idx;
    }
    
-   //-------------------------------------------------------------------
-   // اضافه کردن به پوزیشن موجود (80% باقیمانده)
-   //-------------------------------------------------------------------
    bool AddToPosition(int positionIndex, double additionalVolume)
    {
-      if(positionIndex >= ArraySize(activePositions))
-         return false;
-      
-      if(activePositions[positionIndex].status != STATUS_POSITION_OPEN)
-         return false;
+      if(positionIndex >= ArraySize(activePositions)) return false;
+      if(activePositions[positionIndex].status != STATUS_POSITION_OPEN) return false;
       
       activePositions[positionIndex].volume += additionalVolume;
-      
-      // ریسک کل به‌روز میشود
       activePositions[positionIndex].riskAmount = 
          MathAbs(activePositions[positionIndex].openPrice - 
                 activePositions[positionIndex].stopLoss) * 
@@ -468,27 +391,20 @@ public:
       return true;
    }
    
-   //-------------------------------------------------------------------
-   // بروزرسانی تریلینگ استاپ
-   //-------------------------------------------------------------------
+   // ========== بروزرسانی تریلینگ استاپ ==========
    bool UpdateTrailingStop(int positionIndex, double currentPrice)
    {
-      if(positionIndex >= ArraySize(activePositions))
-         return false;
-      
-      if(!riskParams.useTrailingStop)
-         return false;
+      if(positionIndex >= ArraySize(activePositions)) return false;
+      if(!riskParams.useTrailingStop) return false;
       
       PositionInfo &pos = activePositions[positionIndex];
       
       if(pos.isLong)
       {
          double profitPercent = (currentPrice - pos.openPrice) / pos.openPrice * 100;
-         
          if(profitPercent >= riskParams.trailingActivation)
          {
             double newStop = currentPrice - (pos.openPrice * riskParams.trailingDistance / 100);
-            
             if(newStop > pos.stopLoss)
             {
                pos.stopLoss = newStop;
@@ -500,11 +416,9 @@ public:
       else
       {
          double profitPercent = (pos.openPrice - currentPrice) / pos.openPrice * 100;
-         
          if(profitPercent >= riskParams.trailingActivation)
          {
             double newStop = currentPrice + (pos.openPrice * riskParams.trailingDistance / 100);
-            
             if(newStop < pos.stopLoss || pos.stopLoss == 0)
             {
                pos.stopLoss = newStop;
@@ -517,23 +431,17 @@ public:
       return false;
    }
    
-   //-------------------------------------------------------------------
-   // انتقال به بریک ایون
-   //-------------------------------------------------------------------
+   // ========== انتقال به بریک ایون ==========
    bool MoveToBreakeven(int positionIndex, double currentPrice)
    {
-      if(positionIndex >= ArraySize(activePositions))
-         return false;
-      
-      if(!riskParams.useBreakeven)
-         return false;
+      if(positionIndex >= ArraySize(activePositions)) return false;
+      if(!riskParams.useBreakeven) return false;
       
       PositionInfo &pos = activePositions[positionIndex];
       
       if(pos.isLong)
       {
          double profitPercent = (currentPrice - pos.openPrice) / pos.openPrice * 100;
-         
          if(profitPercent >= riskParams.breakevenActivation)
          {
             if(pos.stopLoss < pos.openPrice)
@@ -547,7 +455,6 @@ public:
       else
       {
          double profitPercent = (pos.openPrice - currentPrice) / pos.openPrice * 100;
-         
          if(profitPercent >= riskParams.breakevenActivation)
          {
             if(pos.stopLoss > pos.openPrice || pos.stopLoss == 0)
@@ -562,13 +469,10 @@ public:
       return false;
    }
    
-   //-------------------------------------------------------------------
-   // بستن بخشی از پوزیشن
-   //-------------------------------------------------------------------
+   // ========== بستن بخشی از پوزیشن ==========
    double ClosePartialPosition(int positionIndex, double closePercent, ENUM_EXIT_REASON reason)
    {
-      if(positionIndex >= ArraySize(activePositions))
-         return 0;
+      if(positionIndex >= ArraySize(activePositions)) return 0;
       
       PositionInfo &pos = activePositions[positionIndex];
       double closeVolume = pos.volume * (closePercent / 100);
@@ -579,7 +483,6 @@ public:
       pos.volume -= closeVolume;
       pos.status = STATUS_PARTIAL_CLOSED;
       
-      // محاسبه سود/زیان
       double profit = 0;
       if(pos.isLong)
          profit = (pos.currentPrice - pos.openPrice) * closeVolume * 
@@ -590,22 +493,29 @@ public:
       
       dailyPnL += profit;
       
+      // به‌روزرسانی سرمایه اولیه در حالت FullCapital
+      if(m_useFullCapital)
+      {
+         double newBalance = accountBalance + profit; // accountBalance قبل از بسته شدن باید موجودی قبلی باشد
+         if(newBalance < m_initialCapital)
+         {
+            m_initialCapital = newBalance;
+            Print("📉 سرمایه اولیه به‌روزرسانی شد: ", DoubleToString(m_initialCapital, 2));
+         }
+      }
+      
       Print("✂️ بستن جزئی پوزیشن - ", closePercent, "% | سود: ", DoubleToString(profit, 2), " USD");
       
       return profit;
    }
    
-   //-------------------------------------------------------------------
-   // بستن کامل پوزیشن
-   //-------------------------------------------------------------------
+   // ========== بستن کامل پوزیشن ==========
    double CloseFullPosition(int positionIndex, ENUM_EXIT_REASON reason)
    {
-      if(positionIndex >= ArraySize(activePositions))
-         return 0;
+      if(positionIndex >= ArraySize(activePositions)) return 0;
       
       PositionInfo &pos = activePositions[positionIndex];
       
-      // محاسبه سود/زیان
       double profit = 0;
       if(pos.isLong)
          profit = (pos.currentPrice - pos.openPrice) * pos.volume * 
@@ -615,6 +525,18 @@ public:
                   SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
       
       dailyPnL += profit;
+      
+      // به‌روزرسانی سرمایه اولیه در حالت FullCapital
+      if(m_useFullCapital)
+      {
+         double newBalance = accountBalance + profit; // accountBalance قبل از بسته شدن باید موجودی قبلی باشد
+         if(newBalance < m_initialCapital)
+         {
+            m_initialCapital = newBalance;
+            Print("📉 سرمایه اولیه به‌روزرسانی شد: ", DoubleToString(m_initialCapital, 2));
+         }
+         // اگر سود کردیم، سرمایه اولیه را تغییر نمی‌دهیم
+      }
       
       string reasonStr;
       switch(reason)
@@ -632,7 +554,6 @@ public:
       
       pos.status = STATUS_FULLY_CLOSED;
       
-      // حذف از آرایه
       for(int i = positionIndex; i < ArraySize(activePositions) - 1; i++)
          activePositions[i] = activePositions[i + 1];
       ArrayResize(activePositions, ArraySize(activePositions) - 1);
@@ -640,20 +561,15 @@ public:
       return profit;
    }
    
-   //-------------------------------------------------------------------
-   // بررسی سیگنال خلاف جهت
-   //-------------------------------------------------------------------
+   // ========== بررسی سیگنال خلاف جهت ==========
    bool CheckReversalSignal(int positionIndex, const SignalBar &reversalSignal)
    {
-      if(positionIndex >= ArraySize(activePositions))
-         return false;
+      if(positionIndex >= ArraySize(activePositions)) return false;
       
       PositionInfo &pos = activePositions[positionIndex];
       
-      // اگر سیگنال خلاف جهت پوزیشن فعلی باشد
       if(reversalSignal.isLong == !pos.isLong)
       {
-         // قدرت سیگنال باید بالا باشد
          if(reversalSignal.strength >= 4)
          {
             CloseFullPosition(positionIndex, EXIT_REVERSAL_SIGNAL);
@@ -664,21 +580,17 @@ public:
       return false;
    }
    
-   //-------------------------------------------------------------------
-   // محاسبه حد ضرر بر اساس ATR یا نوسان
-   //-------------------------------------------------------------------
+   // ========== محاسبه حد ضرر بر اساس ATR ==========
    double CalculateAdaptiveStopLoss(const MqlRates &candles[], int index, bool isLong, int period = 14)
    {
       if(index < period) return 0;
       
-      // محاسبه ATR ساده
       double atr = 0;
       for(int i = 0; i < period; i++)
       {
          double high = candles[index - i].high;
          double low = candles[index - i].low;
          double prevClose = (index - i - 1 >= 0) ? candles[index - i - 1].close : candles[index - i].open;
-         
          double tr = MathMax(high - low, MathMax(MathAbs(high - prevClose), MathAbs(low - prevClose)));
          atr += tr;
       }
@@ -690,38 +602,29 @@ public:
          return candles[index].high + atr * 1.5;
    }
    
-   //-------------------------------------------------------------------
-   // بررسی محدودیت تعداد پوزیشن
-   //-------------------------------------------------------------------
+   // ========== بررسی محدودیت تعداد پوزیشن ==========
    bool CanOpenNewPosition()
    {
       int openCount = 0;
-      
       for(int i = 0; i < ArraySize(activePositions); i++)
       {
          if(activePositions[i].status == STATUS_POSITION_OPEN ||
             activePositions[i].status == STATUS_PARTIAL_CLOSED)
             openCount++;
       }
-      
       return (openCount < riskParams.maxPositions);
    }
    
-   //-------------------------------------------------------------------
-   // بررسی ریسک روزانه
-   //-------------------------------------------------------------------
+   // ========== بررسی ریسک روزانه ==========
    bool IsDailyRiskExceeded()
    {
       return (dailyPnL <= -accountBalance * (riskParams.maxRiskPerDay / 100));
    }
    
-   //-------------------------------------------------------------------
-   // محاسبه سود/زیان شناور
-   //-------------------------------------------------------------------
+   // ========== محاسبه سود/زیان شناور ==========
    double CalculateFloatingProfit()
    {
       double totalProfit = 0;
-      
       for(int i = 0; i < ArraySize(activePositions); i++)
       {
          if(activePositions[i].status == STATUS_POSITION_OPEN ||
@@ -737,30 +640,22 @@ public:
                              SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
          }
       }
-      
       return totalProfit;
    }
    
-   //-------------------------------------------------------------------
-   // ریست روزانه
-   //-------------------------------------------------------------------
+   // ========== ریست روزانه ==========
    void DailyReset()
    {
       datetime currentTime = TimeCurrent();
-      
       if(TimeDay(currentTime) != TimeDay(lastResetTime))
       {
          dailyPnL = 0;
          lastResetTime = currentTime;
-         
-         // ریست وضعیت SL اجباری در شروع روز جدید
          ResetForcedSLStatus();
       }
    }
    
-   //-------------------------------------------------------------------
-   // دریافت آمار معاملات
-   //-------------------------------------------------------------------
+   // ========== دریافت آمار معاملات ==========
    string GetTradeStats()
    {
       string stats = "";
@@ -773,27 +668,30 @@ public:
       stats += "ریسک روزانه: " + DoubleToString(MathAbs(dailyPnL) / accountBalance * 100, 2) + "%\n";
       stats += "حداکثر ریسک مجاز: " + DoubleToString(riskParams.maxRiskPerDay, 2) + "%\n";
       
-      // اضافه کردن آمار SL اجباری
       stats += "──────────────────────────────────────────\n";
       stats += "🚨 وضعیت SL اجباری:\n";
       stats += "   آخرین SL ناموفق: " + (lastTradeSLFailed ? "✅ بله" : "❌ خیر") + "\n";
       stats += "   دفعات متوالی: " + IntegerToString(consecutiveSLFailures) + "\n";
       stats += "   فاصله SL اجباری: " + DoubleToString(forcedSLDistance / pipValue, 1) + " پیپ\n";
       
+      if(m_useFullCapital)
+      {
+         stats += "──────────────────────────────────────────\n";
+         stats += "💰 حالت کل سرمایه فعال:\n";
+         stats += "   سرمایه اولیه: " + DoubleToString(m_initialCapital, 2) + " USD\n";
+         stats += "   سود ذخیره شده: " + DoubleToString(accountBalance - m_initialCapital, 2) + " USD\n";
+      }
+      
       stats += "══════════════════════════════════════════════";
       
       return stats;
    }
    
-   //-------------------------------------------------------------------
-   // تنظیم حالت استفاده از کل سرمایه (برای هماهنگی با ربات اصلی)
-   //-------------------------------------------------------------------
+   // ========== تنظیم حالت استفاده از کل سرمایه (برای هماهنگی با ربات اصلی) ==========
    void SetFullCapitalMode(bool useFullCapital)
    {
-      // این متد برای هماهنگی با ربات اصلی اضافه شده
-      if(useFullCapital)
-         Print("💰 حالت کل سرمایه فعال شد");
-      else
-         Print("💰 حالت 20/80 فعال شد");
+      // این متد برای سازگاری با نسخه‌های قبلی نگه داشته شده است
+      // در نسخه جدید از SetFullCapitalMode(double) استفاده کنید
+      SetFullCapitalMode(useFullCapital, accountBalance);
    }
 };
